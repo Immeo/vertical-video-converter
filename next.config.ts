@@ -1,17 +1,13 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
-  turbopack: {
-    rules: {
-      "*.css": {
-        loaders: ["@tailwindcss/turbopack"],
-        as: "*.css",
-      },
-    },
-  },
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+	experimental: {
+		serverComponentsExternalPackages: ['fluent-ffmpeg', 'ffmpeg-static']
+	},
+	api: {
+		bodyParser: {
+			sizeLimit: '200mb'
+		}
+	}
 };
 
-export default nextConfig;
+module.exports = nextConfig;
