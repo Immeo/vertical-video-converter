@@ -1,16 +1,8 @@
+// src/app/api/status/[processId]/route.ts
+import { processStatuses } from '@/lib/status-store'; // <-- ИМПОРТ
 import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
-
-// Импортируем хранилище статусов (в реальном проекте — вынести в отдельный модуль)
-const processStatuses = new Map<
-	string,
-	{
-		status: 'pending' | 'processing' | 'done' | 'error';
-		progress: number;
-		error?: string;
-	}
->();
 
 export async function GET(
 	_req: NextRequest,

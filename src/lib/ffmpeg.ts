@@ -1,13 +1,29 @@
 import { CropMode, ProcessOptions } from '@/types';
-import ffmpegStatic from 'ffmpeg-static';
 import ffmpeg from 'fluent-ffmpeg';
 
-// Указываем путь к статическому бинарнику FFmpeg
-if (ffmpegStatic) {
-	ffmpeg.setFfmpegPath(ffmpegStatic);
+// ==================== Helper-функции ====================
+
+function getQualityParams(quality: 'low' | 'medium' | 'high') {
+	switch (quality) {
+		case 'low':
+			return { crf: 28, preset: 'ultrafast' };
+		case 'medium':
+			return { crf: 23, preset: 'medium' };
+		case 'high':
+			return { crf: 18, preset: 'slow' };
+	}
 }
 
-export function buildCropFilter(
+function getResolutionParams(resolution: '720p' | '1080p') {
+	switch (resolution) {
+		case '720p':
+			return { width: 720, height: 1280 };
+		case '1080p':
+			return { width: 1080, height: 1920 };
+	}
+}
+
+function buildCropFilter(
 	mode: CropMode,
 	inputWidth: number,
 	inputHeight: number,
@@ -16,66 +32,51 @@ export function buildCropFilter(
 	manualWidth?: number,
 	manualHeight?: number
 ): string {
-	const targetAspect = 9 / 16;
+	const targetWidth = 1080;
+	const targetHeight = 1920;
+	const targetAspect = targetWidth / targetHeight;
 
-	switch (mode) {
-		case 'center': {
-			// Обрезка по центру: вычисляем ширину кадра 9:16 от исходной высоты
-			const cropWidth = Math.min(
-				inputWidth,
-				Math.floor(inputHeight * targetAspect)
-			);
-			const x = Math.floor((inputWidth - cropWidth) / 2);
-			return `crop=${cropWidth}:${inputHeight}:${x}:0,scale=1080:1920`;
-		}
-
-		case 'blur': {
-			// Размытие фона: масштабируем до 1080x1920 с обрезкой, размываем, затем накладываем оригинал
-			return [
-				`[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=40:4,setsar=1[bg]`,
-				`[0:v]scale=1080:-1[fg]`,
-				`[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`
-			].join(';');
-		}
-
-		case 'manual': {
-			// Ручной выбор области: координаты в процентах
-			const w = Math.floor(((manualWidth || 100) * inputWidth) / 100);
-			const h = Math.floor(((manualHeight || 100) * inputHeight) / 100);
-			const x = Math.floor(((manualX || 0) * inputWidth) / 100);
-			const y = Math.floor(((manualY || 0) * inputHeight) / 100);
-			return `crop=${w}:${h}:${x}:${y},scale=1080:1920`;
-		}
-
-		default:
-			throw new Error('Неизвестный режим кадрирования');
+	if (mode === 'blur') {
+		// Масштабируем до цели, затем padding с размытым фоном, затем кроп
+		return [
+			`scale=${inputWidth}:${inputHeight}:force_original_aspect_ratio=decrease`,
+			`pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:color=black`,
+			`crop=${targetWidth}:${targetHeight}`
+		].join(',');
 	}
-}
 
-export function getResolutionParams(resolution: '720p' | '1080p'): {
-	width: number;
-	height: number;
-} {
-	return resolution === '1080p'
-		? { width: 1080, height: 1920 }
-		: { width: 720, height: 1280 };
-}
-
-export function getQualityParams(quality: 'low' | 'medium' | 'high'): {
-	crf: number;
-	preset: string;
-} {
-	switch (quality) {
-		case 'high':
-			return { crf: 18, preset: 'slow' };
-		case 'medium':
-			return { crf: 23, preset: 'medium' };
-		case 'low':
-			return { crf: 28, preset: 'fast' };
-		default:
-			return { crf: 23, preset: 'medium' };
+	if (mode === 'manual' && manualWidth && manualHeight) {
+		const x = (manualX! / 100) * inputWidth;
+		const y = (manualY! / 100) * inputHeight;
+		const w = (manualWidth / 100) * inputWidth;
+		const h = (manualHeight / 100) * inputHeight;
+		return [
+			`scale=${inputWidth}:${inputHeight}`,
+			`crop=${w}:${h}:${x}:${y}`
+		].join(',');
 	}
+
+	// center — кроп по центру до целевого соотношения сторон
+	const inputAspect = inputWidth / inputHeight;
+	let w: number, h: number;
+
+	if (inputAspect > targetAspect) {
+		// шире — кропим по ширине
+		w = inputHeight * targetAspect;
+		h = inputHeight;
+	} else {
+		// выше — кропим по высоте
+		w = inputWidth;
+		h = inputWidth / targetAspect;
+	}
+
+	const x = (inputWidth - w) / 2;
+	const y = (inputHeight - h) / 2;
+
+	return `crop=${w}:${h}:${x}:${y}`;
 }
+
+// ==================== Основные функции ====================
 
 export function createFFmpegCommand(
 	inputPath: string,
@@ -87,17 +88,28 @@ export function createFFmpegCommand(
 	const command = ffmpeg(inputPath);
 	const { crf, preset } = getQualityParams(options.quality);
 	const { width, height } = getResolutionParams(options.resolution);
+	const duration = options.endTime - options.startTime;
 
-	// Обрезка по времени
-	command.setStartTime(options.startTime);
-	command.setDuration(options.endTime - options.startTime);
+	command
+		.size(`${width}x${height}`)
+		.videoCodec('libx264')
+		.audioCodec('aac')
+		.outputOptions([
+			`-ss ${options.startTime}`,
+			`-t ${duration}`,
+			`-crf ${crf}`,
+			`-preset ${preset}`,
+			'-profile:v high',
+			'-level 4.0',
+			'-pix_fmt yuv420p',
+			'-movflags +faststart',
+			'-b:a 128k',
+			'-ar 44100',
+			'-ac 2'
+		]);
 
-	// Применяем фильтры в зависимости от режима
 	if (options.crop.mode === 'blur') {
-		command.complexFilter(
-			buildCropFilter('blur', inputWidth, inputHeight),
-			'out'
-		);
+		command.videoFilter(buildCropFilter('blur', inputWidth, inputHeight));
 	} else {
 		const filter = buildCropFilter(
 			options.crop.mode,
@@ -108,33 +120,8 @@ export function createFFmpegCommand(
 			options.crop.manualWidth,
 			options.crop.manualHeight
 		);
-		command.videoFilters(filter);
+		command.videoFilter(filter);
 	}
-
-	command
-		.size(`${width}x${height}`)
-		.videoCodec('libx264')
-		.outputOptions([
-			`-crf ${crf}`,
-			`-preset ${preset}`,
-			'-profile:v high',
-			'-level 4.0',
-			'-pix_fmt yuv420p',
-			'-movflags +faststart',
-			'-c:a aac',
-			'-b:a 128k',
-			'-ar 44100',
-			'-ac 2'
-		])
-		.on('progress', progress => {
-			console.log(`Обработка: ${progress.percent?.toFixed(1)}%`);
-		})
-		.on('end', () => {
-			console.log('Обработка завершена');
-		})
-		.on('error', err => {
-			console.error('Ошибка FFmpeg:', err.message);
-		});
 
 	return command;
 }
@@ -158,13 +145,21 @@ export function runFFmpeg(
 
 		if (onProgress) {
 			command.on('progress', progress => {
-				onProgress(progress.percent || 0);
+				// fluent-ffmpeg progress: { percent?, currentDuration, frames, ... }
+				if (progress.percent) {
+					onProgress(progress.percent);
+				} else if (progress.currentDuration) {
+					// fallback: оцениваем по текущей длительности
+					const duration = options.endTime - options.startTime;
+					const percent = (progress.currentDuration / duration) * 100;
+					onProgress(Math.min(percent, 99));
+				}
 			});
 		}
 
 		command
-			.save(outputPath)
 			.on('end', () => resolve())
-			.on('error', err => reject(new Error(`Ошибка FFmpeg: ${err.message}`)));
+			.on('error', err => reject(new Error(`Ошибка FFmpeg: ${err.message}`)))
+			.save(outputPath);
 	});
 }

@@ -1,4 +1,5 @@
 import { runFFmpeg } from '@/lib/ffmpeg';
+import { processStatuses } from '@/lib/status-store';
 import { fileExists, getOutputPath, getUploadPath } from '@/lib/storage';
 import { validateProcessOptions } from '@/lib/validation';
 import { randomUUID } from 'crypto';
@@ -7,16 +8,6 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
-
-// In-memory хранилище статусов (для MVP; в продакшене — Redis/БД)
-const processStatuses = new Map<
-	string,
-	{
-		status: 'pending' | 'processing' | 'done' | 'error';
-		progress: number;
-		error?: string;
-	}
->();
 
 export async function POST(req: NextRequest) {
 	try {
@@ -53,9 +44,15 @@ export async function POST(req: NextRequest) {
 
 		// Получаем размеры видео
 		const metadata = await parseFile(uploadPath);
-		const video = metadata.common.video;
-		const inputWidth = video?.width || 1920;
-		const inputHeight = video?.height || 1080;
+		const videoTrack = metadata.format.trackInfo.find(
+			t => t.type === 1 // TrackType.video
+		);
+		const inputWidth =
+			videoTrack?.video?.displayWidth || videoTrack?.video?.pixelWidth || 1920;
+		const inputHeight =
+			videoTrack?.video?.displayHeight ||
+			videoTrack?.video?.pixelHeight ||
+			1080;
 
 		const processId = randomUUID();
 		const outputPath = getOutputPath(processId);
