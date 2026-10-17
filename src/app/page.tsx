@@ -1,69 +1,177 @@
-import Image from "next/image";
+'use client';
+
+import CropSelector from '@/components/CropSelector';
+import ProcessStatus from '@/components/ProcessStatus';
+import UploadForm from '@/components/UploadForm';
+import type { CropOptions, UploadResult } from '@/types';
+import { useState } from 'react';
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+	const [upload, setUpload] = useState<UploadResult | null>(null);
+	const [crop, setCrop] = useState<CropOptions>({ mode: 'center' });
+	const [processId, setProcessId] = useState<string | null>(null);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleUploadSuccess = (result: UploadResult) => {
+		setUpload(result);
+		setError(null);
+	};
+
+	const handleProcess = async (params: {
+		startTime: number;
+		endTime: number;
+		resolution: '720p' | '1080p';
+		quality: 'low' | 'medium' | 'high';
+	}) => {
+		if (!upload) return;
+		setError(null);
+
+		try {
+			const res = await fetch('/api/process', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					uploadId: upload.uploadId,
+					...params,
+					crop
+				})
+			});
+
+			const data = await res.json();
+			if (!res.ok) {
+				setError(data.error || 'Ошибка запуска обработки');
+				return;
+			}
+
+			setProcessId(data.processId);
+		} catch {
+			setError('Не удалось соединиться с сервером.');
+		}
+	};
+
+	return (
+		<div className='space-y-8'>
+			{error && (
+				<div className='bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded'>
+					{error}
+				</div>
+			)}
+
+			{!upload && <UploadForm onSuccess={handleUploadSuccess} />}
+
+			{upload && !processId && (
+				<>
+					<div className='bg-white rounded-lg shadow p-6'>
+						<h2 className='text-lg font-semibold mb-2'>Загруженное видео</h2>
+						<p className='text-sm text-gray-600'>
+							{upload.fileName} — {(upload.fileSize / 1024 / 1024).toFixed(1)}{' '}
+							МБ, {upload.duration.toFixed(1)} сек, {upload.width}×
+							{upload.height}
+						</p>
+					</div>
+
+					<CropSelector value={crop} onChange={setCrop} />
+
+					<div className='bg-white rounded-lg shadow p-6'>
+						<h2 className='text-lg font-semibold mb-4'>Параметры обработки</h2>
+						<ProcessForm upload={upload} onSubmit={handleProcess} />
+					</div>
+				</>
+			)}
+
+			{processId && (
+				<ProcessStatus
+					processId={processId}
+					onReset={() => {
+						setProcessId(null);
+						setUpload(null);
+					}}
+				/>
+			)}
+		</div>
+	);
+}
+
+function ProcessForm({
+	upload,
+	onSubmit
+}: {
+	upload: UploadResult;
+	onSubmit: (params: {
+		startTime: number;
+		endTime: number;
+		resolution: '720p' | '1080p';
+		quality: 'low' | 'medium' | 'high';
+	}) => void;
+}) {
+	const [startTime, setStartTime] = useState(0);
+	const [endTime, setEndTime] = useState(Math.min(upload.duration, 60));
+	const [resolution, setResolution] = useState<'720p' | '1080p'>('1080p');
+	const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('medium');
+
+	return (
+		<div className='space-y-4'>
+			<div className='grid grid-cols-2 gap-4'>
+				<div>
+					<label className='block text-sm font-medium mb-1'>Начало (сек)</label>
+					<input
+						type='number'
+						min={0}
+						max={upload.duration}
+						step={0.1}
+						value={startTime}
+						onChange={e => setStartTime(parseFloat(e.target.value) || 0)}
+						className='w-full border rounded px-3 py-2'
+					/>
+				</div>
+				<div>
+					<label className='block text-sm font-medium mb-1'>Конец (сек)</label>
+					<input
+						type='number'
+						min={0}
+						max={upload.duration}
+						step={0.1}
+						value={endTime}
+						onChange={e => setEndTime(parseFloat(e.target.value) || 0)}
+						className='w-full border rounded px-3 py-2'
+					/>
+				</div>
+			</div>
+
+			<div className='grid grid-cols-2 gap-4'>
+				<div>
+					<label className='block text-sm font-medium mb-1'>Разрешение</label>
+					<select
+						value={resolution}
+						onChange={e => setResolution(e.target.value as '720p' | '1080p')}
+						className='w-full border rounded px-3 py-2'
+					>
+						<option value='1080p'>1080×1920 (Full HD)</option>
+						<option value='720p'>720×1280 (HD)</option>
+					</select>
+				</div>
+				<div>
+					<label className='block text-sm font-medium mb-1'>Качество</label>
+					<select
+						value={quality}
+						onChange={e =>
+							setQuality(e.target.value as 'low' | 'medium' | 'high')
+						}
+						className='w-full border rounded px-3 py-2'
+					>
+						<option value='high'>Высокое</option>
+						<option value='medium'>Среднее</option>
+						<option value='low'>Низкое</option>
+					</select>
+				</div>
+			</div>
+
+			<button
+				onClick={() => onSubmit({ startTime, endTime, resolution, quality })}
+				className='w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition'
+			>
+				Обработать видео
+			</button>
+		</div>
+	);
 }
