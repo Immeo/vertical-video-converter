@@ -6,7 +6,8 @@ import { useRef, useState } from 'react';
 export default function UploadForm({
 	onSuccess
 }: {
-	onSuccess: (result: UploadResult) => void;
+	// 1. ДОБАВЛЕНО: fileUrl: string вторым аргументом
+	onSuccess: (result: UploadResult, fileUrl: string) => void;
 }) {
 	const [uploading, setUploading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -23,7 +24,13 @@ export default function UploadForm({
 		setUploading(true);
 		setError(null);
 
+		// 2. ОБЪЯВЛЕНО: переменная для хранения ссылки, чтобы управлять ею в catch
+		let fileUrl: string | null = null;
+
 		try {
+			// 3. СОЗДАНО: локальная ссылка на файл для мгновенного предпросмотра
+			fileUrl = URL.createObjectURL(file);
+
 			const formData = new FormData();
 			formData.append('video', file);
 
@@ -35,12 +42,17 @@ export default function UploadForm({
 			const data = await res.json();
 			if (!res.ok) {
 				setError(data.error || 'Ошибка загрузки');
+				// 4. ОЧИЩЕНО: если сервер вернул ошибку, освобождаем память
+				if (fileUrl) URL.revokeObjectURL(fileUrl);
 				return;
 			}
 
-			onSuccess(data);
+			// 5. ПЕРЕДАНО: данные с сервера И локальная ссылка в родительский компонент
+			onSuccess(data, fileUrl);
 		} catch {
 			setError('Не удалось загрузить файл. Проверьте соединение.');
+			// 6. ОЧИЩЕНО: если произошла сетевая ошибка, также освобождаем память
+			if (fileUrl) URL.revokeObjectURL(fileUrl);
 		} finally {
 			setUploading(false);
 		}

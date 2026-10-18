@@ -3,17 +3,31 @@
 import CropSelector from '@/components/CropSelector';
 import ProcessStatus from '@/components/ProcessStatus';
 import UploadForm from '@/components/UploadForm';
+import VideoPreview from '@/components/VideoPreview'; // <-- ИМПОРТ НОВОГО КОМПОНЕНТА
 import type { CropOptions, UploadResult } from '@/types';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function Home() {
 	const [upload, setUpload] = useState<UploadResult | null>(null);
+	const [videoUrl, setVideoUrl] = useState<string | null>(null); // <-- НОВЫЙ СТЕЙТ
 	const [crop, setCrop] = useState<CropOptions>({ mode: 'center' });
 	const [processId, setProcessId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
-	const handleUploadSuccess = (result: UploadResult) => {
+	// Очистка URL объекта при размонтировании или новой загрузке
+	useEffect(() => {
+		return () => {
+			if (videoUrl) {
+				URL.revokeObjectURL(videoUrl);
+			}
+		};
+	}, [videoUrl]);
+
+	// Обратите внимание: здесь добавлен аргумент fileUrl.
+	// Вам нужно будет слегка доработать UploadForm, чтобы он передавал его (см. ниже).
+	const handleUploadSuccess = (result: UploadResult, fileUrl: string) => {
 		setUpload(result);
+		setVideoUrl(fileUrl);
 		setError(null);
 	};
 
@@ -50,7 +64,7 @@ export default function Home() {
 	};
 
 	return (
-		<div className='space-y-8'>
+		<div className='space-y-8 max-w-2xl mx-auto py-8 px-4'>
 			{error && (
 				<div className='bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded'>
 					{error}
@@ -59,7 +73,7 @@ export default function Home() {
 
 			{!upload && <UploadForm onSuccess={handleUploadSuccess} />}
 
-			{upload && !processId && (
+			{upload && !processId && videoUrl && (
 				<>
 					<div className='bg-white rounded-lg shadow p-6'>
 						<h2 className='text-lg font-semibold mb-2'>Загруженное видео</h2>
@@ -69,6 +83,9 @@ export default function Home() {
 							{upload.height}
 						</p>
 					</div>
+
+					{/* <-- ВСТАВКА ПРЕДПРОСМОТРА МЕЖДУ ВЫБОРОМ И НАСТРОЙКАМИ */}
+					<VideoPreview videoUrl={videoUrl} crop={crop} />
 
 					<CropSelector value={crop} onChange={setCrop} />
 
@@ -85,6 +102,7 @@ export default function Home() {
 					onReset={() => {
 						setProcessId(null);
 						setUpload(null);
+						setVideoUrl(null);
 					}}
 				/>
 			)}

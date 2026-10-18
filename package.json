@@ -1,6 +1,6 @@
 {
-	"name": "vertical-video-converter",
-	"version": "1.0.1",
+	"name": "vertica-video-converter",
+	"version": "1.0.2",
 	"description": "Video converter",
 	"private": true,
 	"scripts": {

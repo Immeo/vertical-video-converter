@@ -1,7 +1,7 @@
 'use client';
 
 import type { CropOptions } from '@/types';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface VideoPreviewProps {
 	videoUrl: string;
@@ -11,25 +11,39 @@ interface VideoPreviewProps {
 export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const videoRef = useRef<HTMLVideoElement>(null);
+	const [ready, setReady] = useState(false);
+	const [debug, setDebug] = useState<string>('');
 
 	const drawPreview = () => {
 		const canvas = canvasRef.current;
 		const video = videoRef.current;
-		if (!canvas || !video || video.readyState < 2) return;
+		if (!canvas || !video) return;
+
+		// Критичная проверка: видео должно быть готово и иметь размеры
+		if (
+			video.readyState < 2 ||
+			video.videoWidth === 0 ||
+			video.videoHeight === 0
+		) {
+			setDebug(
+				`Видео не готово: readyState=${video.readyState}, size=${video.videoWidth}x${video.videoHeight}`
+			);
+			return;
+		}
 
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 
-		// Целевое разрешение превью (пропорция 9:16, масштабирована для производительности)
 		const targetW = canvas.width; // 360
 		const targetH = canvas.height; // 640
 
-		ctx.clearRect(0, 0, targetW, targetH);
+		// Очищаем и рисуем чёрный фон (letterbox-зоны)
 		ctx.fillStyle = '#000';
 		ctx.fillRect(0, 0, targetW, targetH);
 
 		if (crop.mode === 'blur') {
-			// 1. Фон: размытое видео, заполняющее весь кадр (аналог object-cover)
+			// 1. Размытый фон (cover)
+			ctx.save();
 			ctx.filter = 'blur(20px) brightness(0.6)';
 			const bgScale = Math.max(
 				targetW / video.videoWidth,
@@ -38,9 +52,9 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 			const bgW = video.videoWidth * bgScale;
 			const bgH = video.videoHeight * bgScale;
 			ctx.drawImage(video, (targetW - bgW) / 2, (targetH - bgH) / 2, bgW, bgH);
+			ctx.restore();
 
-			// 2. Передний план: видео вписано в кадр без обрезки (аналог object-contain)
-			ctx.filter = 'none';
+			// 2. Чёткое видео по центру (contain)
 			const fgScale = Math.min(
 				targetW / video.videoWidth,
 				targetH / video.videoHeight
@@ -55,7 +69,6 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 				sHeight = video.videoHeight;
 
 			if (crop.mode === 'center') {
-				// Обрезка по центру (аналог object-cover)
 				const scale = Math.max(
 					targetW / video.videoWidth,
 					targetH / video.videoHeight
@@ -65,7 +78,6 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 				sx = (video.videoWidth - sWidth) / 2;
 				sy = (video.videoHeight - sHeight) / 2;
 			} else if (crop.mode === 'manual') {
-				// Ручная обрезка: берем указанный процент от оригинала и растягиваем на 9:16
 				sx = video.videoWidth * ((crop.manualX ?? 0) / 100);
 				sy = video.videoHeight * ((crop.manualY ?? 0) / 100);
 				sWidth = video.videoWidth * ((crop.manualWidth ?? 100) / 100);
@@ -75,7 +87,7 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 			ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, targetW, targetH);
 		}
 
-		// Визуальная сетка (правило третей) для профессионального вида
+		// Сетка правила третей
 		ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
 		ctx.lineWidth = 1;
 		ctx.beginPath();
@@ -88,28 +100,66 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 		ctx.moveTo(0, (targetH / 3) * 2);
 		ctx.lineTo(targetW, (targetH / 3) * 2);
 		ctx.stroke();
+
+		setDebug(
+			`OK: ${video.videoWidth}×${video.videoHeight} → ${targetW}×${targetH} | mode=${crop.mode}`
+		);
+		setReady(true);
 	};
 
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video) return;
+		if (!video || !videoUrl) return;
 
-		const handleReady = () => drawPreview();
+		setReady(false);
 
-		if (video.readyState >= 2) {
-			drawPreview();
-		} else {
-			video.addEventListener('loadeddata', handleReady);
-			video.addEventListener('seeked', handleReady);
+		// Сбрасываем обработчики от предыдущего видео
+		const cleanup = () => {
+			video.removeEventListener('loadeddata', onLoad);
+			video.removeEventListener('canplaythrough', onLoad);
+			video.removeEventListener('seeked', onSeeked);
+			video.removeEventListener('error', onError);
+		};
+
+		const onLoad = () => {
+			// Seek к 0.5 сек — первый кадр часто чёрный в H.264
+			if (video.duration > 0.5 && video.currentTime < 0.5) {
+				video.currentTime = 0.5;
+			} else {
+				drawPreview();
+			}
+		};
+
+		const onSeeked = () => {
+			// Используем rAF, чтобы браузер успел отрисовать кадр в DOM
+			requestAnimationFrame(() => drawPreview());
+		};
+
+		const onError = () => {
+			setDebug(`Ошибка загрузки видео: ${video.error?.message || 'unknown'}`);
+		};
+
+		video.addEventListener('loadeddata', onLoad);
+		video.addEventListener('canplaythrough', onLoad);
+		video.addEventListener('seeked', onSeeked);
+		video.addEventListener('error', onError);
+
+		// Принудительно перезагружаем видео при смене URL
+		if (video.src !== videoUrl) {
+			video.src = videoUrl;
+			video.load();
+		} else if (video.readyState >= 2) {
+			// Видео уже загружено — просто перерисовываем
+			if (video.currentTime < 0.5 && video.duration > 0.5) {
+				video.currentTime = 0.5;
+			} else {
+				drawPreview();
+			}
 		}
 
-		return () => {
-			video.removeEventListener('loadeddata', handleReady);
-			video.removeEventListener('seeked', handleReady);
-		};
-	}, [crop, videoUrl]); // Перерисовка при смене кадрирования или видео
+		return cleanup;
+	}, [videoUrl, crop]);
 
-	// Проверка на сильное искажение пропорций в ручном режиме
 	const isManualDistorted =
 		crop.mode === 'manual' &&
 		Math.abs((crop.manualWidth ?? 100) / (crop.manualHeight ?? 100) - 9 / 16) >
@@ -126,7 +176,7 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 					<span>⚠️</span>
 					<span>
 						Выбранная область имеет пропорции, отличные от 9:16. Итоговое видео
-						будет растянуто или сжато для соответствия формату.
+						будет растянуто или сжато.
 					</span>
 				</div>
 			)}
@@ -140,15 +190,38 @@ export default function VideoPreview({ videoUrl, crop }: VideoPreviewProps) {
 				/>
 			</div>
 
-			{/* Скрытый видеоэлемент, выступающий источником данных для canvas */}
+			{/* 
+        ВАЖНО: НЕ используем className="hidden" (display:none),
+        иначе браузер не загрузит видео. Используем абсолютное позиционирование
+        за пределами видимой области.
+      */}
 			<video
 				ref={videoRef}
-				src={videoUrl}
 				crossOrigin='anonymous'
-				className='hidden'
 				muted
 				playsInline
+				preload='auto'
+				className='pointer-events-none'
+				style={{
+					position: 'absolute',
+					width: '1px',
+					height: '1px',
+					opacity: 0,
+					overflow: 'hidden'
+				}}
 			/>
+
+			{/* Отладочная информация — удалите после проверки */}
+			<div className='text-xs font-mono text-gray-500 bg-gray-50 p-2 rounded'>
+				{ready ? (
+					<span className='text-green-600'>✓ {debug}</span>
+				) : (
+					<span className='text-orange-600'>
+						{' '}
+						{debug || 'Загрузка видео...'}
+					</span>
+				)}
+			</div>
 
 			<p className='text-xs text-gray-500 text-center'>
 				Показан статический кадр. Итоговое видео будет обработано сервером с
